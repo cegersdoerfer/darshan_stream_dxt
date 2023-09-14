@@ -420,6 +420,18 @@ if test "x$enable_darshan_runtime" = xyes ; then
                    use --with-hdf5 to provide the HDF5 install prefix, if needed.]))
    fi
 
+   # Streaming support (disabled by default)
+   AC_ARG_ENABLE([dxt-streamer-mod],
+      [AS_HELP_STRING([--enable-dxt-streamer-mod],
+                      [Include dxt streaming for runtme I/O monitoring])],
+      [AC_ARG_WITH(ldms, 
+	[AS_HELP_STRING([--with-dxt-stream],
+                      [Streaming directory for dxt streamer.])],[CHECK_STREAMER], 
+	[AC_MSG_ERROR(m4_normalize([--enable-dxt-streamer-mod does not take any argument, use --with-dxt-stream to
+                        provide the location where streaming logs should go.]))])], [enable_dxt-streamer-mod=no])
+
+   AM_CONDITIONAL([HAVE_DXT_STREAMER],[test "x$enable_dxt_streamer_mod" = xyes])
+
    # inform about PnetCDF installs not found in default locations
    AC_ARG_WITH([pnetcdf],
       [AS_HELP_STRING([--with-pnetcdf@<:@=DIR@:>@],
