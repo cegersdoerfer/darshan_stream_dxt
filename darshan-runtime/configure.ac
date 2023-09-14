@@ -766,6 +766,7 @@ else
    enable_posix_mod=no
    enable_stdio_mod=no
    enable_dxt_mod=no
+   enable_dxt_streamer_mod=no
    enable_heatmap_mod=no
    enable_mpiio_mod=no
    enable_apmpi_mod=no
@@ -787,6 +788,7 @@ AM_CONDITIONAL(BUILD_NULL_MODULE,   [test "x$enable_null_mod"    = xyes])
 AM_CONDITIONAL(BUILD_POSIX_MODULE,  [test "x$enable_posix_mod"   = xyes])
 AM_CONDITIONAL(BUILD_STDIO_MODULE,  [test "x$enable_stdio_mod"   = xyes])
 AM_CONDITIONAL(BUILD_DXT_MODULE,    [test "x$enable_dxt_mod"     = xyes])
+AM_CONDITIONAL(BUILD_DXT_STREAMER_MODULE,   [test "x$enable_dxt_streamer_mod"    = xyes])
 AM_CONDITIONAL(BUILD_MPIIO_MODULE,  [test "x$enable_mpiio_mod"   = xyes])
 AM_CONDITIONAL(BUILD_HDF5_MODULE,   [test "x$enable_hdf5_mod"    = xyes])
 AM_CONDITIONAL(BUILD_PNETCDF_MODULE,[test "x$enable_pnetcdf_mod" = xyes])
@@ -875,6 +877,7 @@ if test "x$enable_darshan_runtime" = xyes ; then
            Lustre        module support  - $enable_lustre_mod
            MDHIM         module support  - $enable_mdhim_mod
            HEATMAP       module support  - $enable_heatmap_mod
+           STREAMER      runtime module  - $enable_dxt_streamer_mod
            Memory alignment in bytes     - $with_mem_align
            Log file env variables        - $__log_path_by_env
            Location of Darshan log files - $__log_path
