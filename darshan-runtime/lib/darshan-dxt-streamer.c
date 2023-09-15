@@ -32,10 +32,7 @@ struct darshanConnector dC = {
 void darshan_dxt_streamer_initialize(struct darshan_core_runtime *init_core)
 {
     /* Set flags for various DXT Streamer environment variables */
-    if (getenv("POSIX_ENABLE_DXT_STREAMER"))
-        dC.posix_enable_dxt_streamer = 0;
-    else
-        dC.posix_enable_dxt_streamer = 1;
+    dC.posix_enable_dxt_streamer = 1;
 
     if (getenv("MPIIO_ENABLE_DXT_STREAMER"))
         dC.mpiio_enable_dxt_streamer = 0;
