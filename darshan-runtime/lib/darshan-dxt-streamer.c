@@ -78,7 +78,9 @@ void darshan_dxt_streamer_initialize(struct darshan_core_runtime *init_core)
     return;
 }
 
-void darshan_dxt_streamer_connector_send(uint64_t record_id, int64_t rank, int64_t record_count, char *rwo, int64_t offset, int64_t length, int64_t max_byte, int64_t rw_switch, int64_t flushes,  double start_time, double end_time, double total_time, char *mod_name, char *data_type)
+void darshan_dxt_streamer_connector_send(uint64_t record_id, int64_t rank, int64_t record_count, \
+    char *rwo, int64_t offset, int64_t length, int64_t max_byte, int64_t rw_switch, int64_t flushes,  \
+    double start_time, double end_time, double total_time, char *mod_name, char *data_type)
 {
     char jb11[1024];
     int rc, ret, i, size, exists;
