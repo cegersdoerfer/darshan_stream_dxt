@@ -46,6 +46,7 @@
 #include "darshan-config.h"
 #include "darshan-dynamic.h"
 #include "darshan-dxt.h"
+#include "darshan-dxt-streamer.h"
 
 #ifdef DARSHAN_LUSTRE
 #include <lustre/lustre_user.h>
@@ -351,6 +352,11 @@ void darshan_core_initialize(int argc, char **argv)
              */
             init_core->config.mod_disabled = ~(init_core->config.mod_disabled & 0);
         }
+
+#ifdef HAVE_DXT_STREAMER
+        /* pass init_core to darshan-dxt-streamer connector initialization*/
+        darshan_dxt_streamer_connector_initialize(init_core);
+#endif
 
         /* if darshan was successfully initialized, set the global pointer
          * and record absolute start time so that we can later generate
