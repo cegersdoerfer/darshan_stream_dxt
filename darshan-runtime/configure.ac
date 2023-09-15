@@ -5,7 +5,8 @@ dnl Process this file with autoconf to produce a configure script.
 dnl You may need to use autoheader as well if changing any DEFINEs
 
 AC_PREREQ([2.69])
-AC_INIT([Darshan Runtime],[3.4.2],[darshan-users@lists.mcs.anl.gov],
+AC_INIT([Darshan Runtime], m4_normalize(m4_include([../darshan.version])),
+        [darshan-users@lists.mcs.anl.gov],
         [darshan-runtime],[https://www.mcs.anl.gov/research/projects/darshan])
 AC_CONFIG_HEADERS(darshan-runtime-config.h)
 AH_TOP([/*
@@ -197,6 +198,18 @@ if test "x$enable_darshan_runtime" = xyes ; then
       AC_DEFINE_UNQUOTED([__DARSHAN_JOBID], "$with_jobid_env",
                          [Name of the environment variable that stores the jobid])
       GOT_JOBID=yes
+   fi
+
+   AC_ARG_WITH([username-env],
+      [AS_HELP_STRING([--with-username-env=NAME],
+                      [Name of environment variable that stores the username])],
+      [], [with_username_env=no]
+   )
+   if test "x$with_username_env" = xyes; then
+      AC_MSG_ERROR(--with-username-env must be given a name)
+   elif test "x$with_username_env" != xno; then
+      AC_DEFINE_UNQUOTED([__DARSHAN_USERNAME_ENV], "$with_username_env",
+                         [Name of the environment variable that stores the username])
    fi
 
    AC_ARG_WITH([mod-mem],
@@ -419,6 +432,18 @@ if test "x$enable_darshan_runtime" = xyes ; then
       AC_MSG_ERROR(m4_normalize([--enable-hdf5-mod does not take any argument,
                    use --with-hdf5 to provide the HDF5 install prefix, if needed.]))
    fi
+   
+   # LDMS support (disabled by default)
+   AC_ARG_ENABLE([ldms-mod],
+      [AS_HELP_STRING([--enable-ldms-mod],
+                      [Include LDMS for runtme I/O monitoring])],
+      [AC_ARG_WITH(ldms, 
+	[AS_HELP_STRING([--with-ldms],
+                      [Installation directory for LDMS.])],[CHECK_LDMS], 
+	[AC_MSG_ERROR(m4_normalize([--enable-ldms-mod does not take any argument, use --with-ldms to
+                        provide the LDMS install prefix.]))])], [enable_ldms_mod=no])
+
+   AM_CONDITIONAL([HAVE_LDMS],[test "x$enable_ldms_mod" = xyes])
 
    # inform about PnetCDF installs not found in default locations
    AC_ARG_WITH([pnetcdf],
@@ -754,6 +779,7 @@ else
    enable_posix_mod=no
    enable_stdio_mod=no
    enable_dxt_mod=no
+   enable_ldms_mod=no
    enable_heatmap_mod=no
    enable_mpiio_mod=no
    enable_apmpi_mod=no
@@ -775,6 +801,7 @@ AM_CONDITIONAL(BUILD_NULL_MODULE,   [test "x$enable_null_mod"    = xyes])
 AM_CONDITIONAL(BUILD_POSIX_MODULE,  [test "x$enable_posix_mod"   = xyes])
 AM_CONDITIONAL(BUILD_STDIO_MODULE,  [test "x$enable_stdio_mod"   = xyes])
 AM_CONDITIONAL(BUILD_DXT_MODULE,    [test "x$enable_dxt_mod"     = xyes])
+AM_CONDITIONAL(BUILD_LDMS_MODULE,   [test "x$enable_ldms_mod"    = xyes])
 AM_CONDITIONAL(BUILD_MPIIO_MODULE,  [test "x$enable_mpiio_mod"   = xyes])
 AM_CONDITIONAL(BUILD_HDF5_MODULE,   [test "x$enable_hdf5_mod"    = xyes])
 AM_CONDITIONAL(BUILD_PNETCDF_MODULE,[test "x$enable_pnetcdf_mod" = xyes])
@@ -863,6 +890,7 @@ if test "x$enable_darshan_runtime" = xyes ; then
            Lustre        module support  - $enable_lustre_mod
            MDHIM         module support  - $enable_mdhim_mod
            HEATMAP       module support  - $enable_heatmap_mod
+           LDMS          runtime module  - $enable_ldms_mod
            Memory alignment in bytes     - $with_mem_align
            Log file env variables        - $__log_path_by_env
            Location of Darshan log files - $__log_path

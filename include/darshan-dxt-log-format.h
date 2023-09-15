@@ -40,8 +40,6 @@ struct dxt_file_record {
 
     int64_t write_count;
     int64_t read_count;
-    int64_t open_count;
-    int64_t stat_count;
 };
 
 #endif /* __DARSHAN_DXT_LOG_FORMAT_H */

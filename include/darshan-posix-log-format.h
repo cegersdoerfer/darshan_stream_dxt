@@ -179,8 +179,6 @@ struct darshan_posix_file
     struct darshan_base_record base_rec;
     int64_t counters[POSIX_NUM_INDICES];
     double fcounters[POSIX_F_NUM_INDICES];
-    int64_t open_count;
-    int64_t stat_count;
 };
 
 #endif /* __DARSHAN_POSIX_LOG_FORMAT_H */

@@ -41,10 +41,10 @@ typedef int64_t off64_t;
 
 /* maximum amount of memory to use for storing DXT records */
 #ifdef __DARSHAN_MOD_MEM_MAX
-#define DXT_IO_TRACE_MEM_MAX (__DARSHAN_MOD_MEM_MAX * 1024L * 1024L * 1024L)
+#define DXT_IO_TRACE_MEM_MAX (__DARSHAN_MOD_MEM_MAX * 1024L * 1024L)
 #else
 /* 2 MiB default */
-#define DXT_IO_TRACE_MEM_MAX (1024 * 1024 * 1024)
+#define DXT_IO_TRACE_MEM_MAX (2 * 1024 * 1024)
 #endif
 
 /* Darshan core expects modules to express memory requirements in terms
@@ -52,12 +52,11 @@ typedef int64_t off64_t;
  * are naturally variable in-length, but for simplicity we define each record
  * as being 1 KiB in size
  */
-// #define DXT_DEF_RECORD_SIZE 1024
-#define DXT_DEF_RECORD_SIZE 4096
+#define DXT_DEF_RECORD_SIZE 1024
 
 /* initial size of read/write trace buffer (in number of segments) */
 /* NOTE: when this size is exceeded, the buffer size is doubled */
-#define IO_TRACE_BUF_SIZE 64
+#define IO_TRACE_BUF_SIZE       64
 
 /* The dxt_file_record_ref structure maintains necessary runtime metadata
  * for the DXT file record (dxt_file_record structure, defined in
@@ -78,13 +77,9 @@ struct dxt_file_record_ref
 
     int64_t write_available_buf;
     int64_t read_available_buf;
-    int64_t open_available_buf;
-    int64_t stat_available_buf;
 
     segment_info *write_traces;
     segment_info *read_traces;
-    segment_info *open_traces;
-    segment_info *stat_traces;
 };
 
 /* The dxt_runtime structure maintains necessary state for storing
@@ -107,12 +102,6 @@ static void check_wr_trace_buf(
     struct dxt_file_record_ref *rec_ref, darshan_module_id mod_id,
     struct dxt_runtime *runtime);
 static void check_rd_trace_buf(
-    struct dxt_file_record_ref *rec_ref, darshan_module_id mod_id,
-    struct dxt_runtime *runtime);
-static void check_open_trace_buf(
-    struct dxt_file_record_ref *rec_ref, darshan_module_id mod_id,
-    struct dxt_runtime *runtime);
-static void check_stat_trace_buf(
     struct dxt_file_record_ref *rec_ref, darshan_module_id mod_id,
     struct dxt_runtime *runtime);
 static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
@@ -155,8 +144,6 @@ void dxt_posix_runtime_initialize()
      * configured max memory consumption and the default record size
      */
     size_t dxt_psx_rec_count = DXT_IO_TRACE_MEM_MAX / DXT_DEF_RECORD_SIZE;
-    printf("DXT_IO_TRACE_MEM_MAX: %zu\n", DXT_IO_TRACE_MEM_MAX);
-    fflush(stdout);
     darshan_module_funcs mod_funcs = {
 #ifdef HAVE_MPI
     .mod_redux_func = NULL,
@@ -164,13 +151,9 @@ void dxt_posix_runtime_initialize()
     .mod_output_func = &dxt_posix_output,
     .mod_cleanup_func = &dxt_posix_cleanup
     };
-    printf("mod_funcs: %p\n", mod_funcs);
-    fflush(stdout);
     int ret;
 
     /* register the DXT module with darshan core */
-    printf("enter darshan_core_register_module\n");
-    fflush(stdout);
     ret = darshan_core_register_module(
         DXT_POSIX_MOD,
         mod_funcs,
@@ -178,15 +161,11 @@ void dxt_posix_runtime_initialize()
         &dxt_psx_rec_count,
         &dxt_my_rank,
         NULL);
-    printf("dxt_psx_rec_count: %zu\n", dxt_psx_rec_count);
-
-    
     if(ret < 0)
         return;
 
     DXT_LOCK();
     dxt_posix_runtime = malloc(sizeof(*dxt_posix_runtime));
-    printf("dxt_posix_runtime: %p\n", dxt_posix_runtime);
     if(!dxt_posix_runtime)
     {
         darshan_core_unregister_module(DXT_POSIX_MOD);
@@ -196,7 +175,6 @@ void dxt_posix_runtime_initialize()
     memset(dxt_posix_runtime, 0, sizeof(*dxt_posix_runtime));
     dxt_posix_runtime->mem_used = 0;
     dxt_posix_runtime->mem_allocated = dxt_psx_rec_count * DXT_DEF_RECORD_SIZE;
-    printf("dxt_posix_runtime->mem_allocated: %zu\n", dxt_posix_runtime->mem_allocated);
     DXT_UNLOCK();
 
     return;
@@ -334,99 +312,6 @@ void dxt_posix_read(darshan_record_id rec_id, int64_t offset,
     DXT_UNLOCK();
 }
 
-void dxt_posix_open(darshan_record_id rec_id, double start_time,
-        double end_time)
-{
-    struct dxt_file_record_ref* rec_ref = NULL;
-    struct dxt_file_record *file_rec;
-
-    DXT_LOCK();
-
-    if(!dxt_posix_runtime || dxt_posix_runtime->frozen)
-    {
-        DXT_UNLOCK();
-        return;
-    }
-
-    rec_ref = darshan_lookup_record_ref(dxt_posix_runtime->rec_id_hash,
-                &rec_id, sizeof(darshan_record_id));
-    if(!rec_ref)
-    {
-        /* track new dxt file record */
-        rec_ref = dxt_posix_track_new_file_record(rec_id);
-        if(!rec_ref)
-        {
-            DXT_UNLOCK();
-            return;
-        }
-    }
-
-    file_rec = rec_ref->file_rec;
-    check_open_trace_buf(rec_ref, DXT_POSIX_MOD, dxt_posix_runtime);
-    if(file_rec->open_count == rec_ref->open_available_buf)
-    {
-        /* no more memory for i/o segments ... back out */
-        DXT_UNLOCK();
-        return;
-    }
-
-    rec_ref->open_traces[file_rec->open_count].start_time = start_time;
-    rec_ref->open_traces[file_rec->open_count].end_time = end_time;
-    file_rec->open_count += 1;
-
-    DXT_UNLOCK();
-}
-
-void dxt_posix_stat(darshan_record_id rec_id, double start_time,
-        double end_time)
-{
-    struct dxt_file_record_ref* rec_ref = NULL;
-    struct dxt_file_record *file_rec;
-    printf("dxt_posix_stat\n");
-
-    DXT_LOCK();
-
-    if(!dxt_posix_runtime || dxt_posix_runtime->frozen)
-    {
-        DXT_UNLOCK();
-        return;
-    }
-    printf("dxt_posix_runtime: %p\n", dxt_posix_runtime);
-    rec_ref = darshan_lookup_record_ref(dxt_posix_runtime->rec_id_hash,
-                &rec_id, sizeof(darshan_record_id));
-    if(!rec_ref)
-    {
-        /* track new dxt file record */
-        printf("track new dxt file record\n");
-        rec_ref = dxt_posix_track_new_file_record(rec_id);
-        if(!rec_ref)
-        {
-            printf("rec_ref is NULL\n");
-            DXT_UNLOCK();
-            return;
-        }
-    }
-
-    file_rec = rec_ref->file_rec;
-    check_stat_trace_buf(rec_ref, DXT_POSIX_MOD, dxt_posix_runtime);
-    printf("file_rec->stat_count: %d\n", file_rec->stat_count);
-    printf("rec_ref->stat_available_buf: %d\n", rec_ref->stat_available_buf);
-    if(file_rec->stat_count == rec_ref->stat_available_buf)
-    {
-        /* no more memory for i/o segments ... back out */
-        DXT_UNLOCK();
-        printf("no more memory for i/o segments ... back out\n");
-        return;
-    }
-
-    rec_ref->stat_traces[file_rec->stat_count].start_time = start_time;
-    rec_ref->stat_traces[file_rec->stat_count].end_time = end_time;
-    file_rec->stat_count += 1;
-    printf("file_rec->stat_count: %d\n", file_rec->stat_count);
-
-    DXT_UNLOCK();
-}
-
 void dxt_mpiio_write(darshan_record_id rec_id, int64_t offset,
         int64_t length, double start_time, double end_time)
 {
@@ -519,16 +404,13 @@ void dxt_mpiio_read(darshan_record_id rec_id, int64_t offset,
 
 static void dxt_posix_filter_traces_iterator(void *rec_ref_p, void *user_ptr)
 {
-    printf("dxt_posix_filter_traces_iterator\n");
     struct dxt_file_record_ref *psx_rec_ref, *mpiio_rec_ref;
     struct darshan_posix_file *psx_file;
     struct dxt_trigger *trigger = (struct dxt_trigger *)user_ptr;
     int should_keep = 0;
 
     psx_rec_ref = (struct dxt_file_record_ref *)rec_ref_p;
-    printf("psx_rec_ref: %p\n", psx_rec_ref);
     psx_file = darshan_posix_rec_id_to_file(psx_rec_ref->file_rec->base_rec.id);
-    printf("psx_file: %p\n", psx_file);
 
     /* analyze dynamic triggers to determine whether we should keep the record */
     switch(trigger->type)
@@ -586,8 +468,6 @@ static void dxt_posix_filter_traces_iterator(void *rec_ref_p, void *user_ptr)
             {
                 free(psx_rec_ref->write_traces);
                 free(psx_rec_ref->read_traces);
-                free(psx_rec_ref->open_traces);
-                free(psx_rec_ref->stat_traces);
                 free(psx_rec_ref->file_rec);
                 free(psx_rec_ref);
             }
@@ -736,129 +616,6 @@ static void check_rd_trace_buf(struct dxt_file_record_ref *rec_ref,
     }
 }
 
-static void check_open_trace_buf(struct dxt_file_record_ref *rec_ref,
-    darshan_module_id mod_id, struct dxt_runtime *runtime)
-{
-    struct dxt_file_record *file_rec = rec_ref->file_rec;
-
-    int open_count = file_rec->open_count;
-    int open_available_buf = rec_ref->open_available_buf;
-
-    if (open_count >= open_available_buf)
-    {
-        int open_count_inc;
-        if(open_available_buf == 0)
-            open_count_inc = IO_TRACE_BUF_SIZE;
-        else
-            open_count_inc = open_available_buf;
-
-        size_t mem_left = runtime->mem_allocated - runtime->mem_used;
-        size_t mem_req = open_count_inc * sizeof(segment_info);
-        if(mem_req > mem_left)
-        {
-            open_count_inc = mem_left / sizeof(segment_info);
-            if(open_count_inc == 0)
-            {
-                /* we need to request at least one record, even if we
-                 * know there is not enough memory left, so that Darshan
-                 * core can mark this module as having ran out of data
-                 */
-                open_count_inc = 1;
-            }
-            mem_req = open_count_inc * sizeof(segment_info);
-        }
-
-        /* register the increased open buffer size with Darshan core */
-        /* NOTE: register_record() does not handle DXT memory allocations,
-         * it just checks that there is enough memory for the record -- if
-         * there is not enough memory, this function will return NULL
-         */
-        if(darshan_core_register_record(
-             file_rec->base_rec.id,
-             NULL, /* no name registration needed, handled in initial record alloc */
-             mod_id,
-             mem_req,
-             NULL))
-        {
-            /* there is enough memory for these additional trace segments,
-             * but we have to (re)allocate them ourselves
-             */
-            open_available_buf += open_count_inc;
-            rec_ref->open_traces =
-                (segment_info *)realloc(rec_ref->open_traces,
-                        open_available_buf * sizeof(segment_info));
-
-            rec_ref->open_available_buf = open_available_buf;
-        }
-        runtime->mem_used += mem_req;
-    }
-}
-
-static void check_stat_trace_buf(struct dxt_file_record_ref *rec_ref,
-    darshan_module_id mod_id, struct dxt_runtime *runtime)
-{
-    struct dxt_file_record *file_rec = rec_ref->file_rec;
-
-    int stat_count = file_rec->stat_count;
-    int stat_available_buf = rec_ref->stat_available_buf;
-
-    if (stat_count >= stat_available_buf)
-    {
-        int stat_count_inc;
-        if(stat_available_buf == 0)
-            stat_count_inc = IO_TRACE_BUF_SIZE;
-        else
-            stat_count_inc = stat_available_buf;
-
-        size_t mem_left = runtime->mem_allocated - runtime->mem_used;
-        printf("mem_left: %d\n", mem_left);
-        size_t mem_req = stat_count_inc * sizeof(segment_info);
-        if(mem_req > mem_left)
-        {
-            stat_count_inc = mem_left / sizeof(segment_info);
-            if(stat_count_inc == 0)
-            {
-                /* we need to request at least one record, even if we
-                 * know there is not enough memory left, so that Darshan
-                 * core can mark this module as having ran out of data
-                 */
-                stat_count_inc = 1;
-            }
-            mem_req = stat_count_inc * sizeof(segment_info);
-        }
-
-        /* register the increased stat buffer size with Darshan core */
-        /* NOTE: register_record() does not handle DXT memory allocations,
-         * it just checks that there is enough memory for the record -- if
-         * there is not enough memory, this function will return NULL
-         */
-        if(darshan_core_register_record(
-             file_rec->base_rec.id,
-             NULL, /* no name registration needed, handled in initial record alloc */
-             mod_id,
-             mem_req,
-             NULL))
-        {
-            /* there is enough memory for these additional trace segments,
-             * but we have to (re)allocate them ourselves
-             */
-            stat_available_buf += stat_count_inc;
-            printf("stat_available_buf: %d\n", stat_available_buf);
-            rec_ref->stat_traces =
-                (segment_info *)realloc(rec_ref->stat_traces,
-                        stat_available_buf * sizeof(segment_info));
-            if (rec_ref->stat_traces == NULL)
-            {
-                printf("rec_ref->stat_traces is NULL\n");
-            }
-            printf("rec_ref->stat_traces: %p\n", rec_ref->stat_traces);
-            rec_ref->stat_available_buf = stat_available_buf;
-        }
-        runtime->mem_used += mem_req;
-        printf("mem_used: %d\n", runtime->mem_used);
-    }
-}
-
 static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
     darshan_record_id rec_id)
 {
@@ -879,7 +636,6 @@ static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
     /* add a reference to this file record based on record id */
     ret = darshan_add_record_ref(&(dxt_posix_runtime->rec_id_hash), &rec_id,
             sizeof(darshan_record_id), rec_ref);
-    printf("ret: %d\n", ret);
     if(ret == 0)
     {
         free(rec_ref);
@@ -899,7 +655,6 @@ static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
          sizeof(*file_rec),
          NULL) == NULL)
     {
-        printf("darshan_core_register_record failed\n");
         darshan_delete_record_ref(&(dxt_posix_runtime->rec_id_hash),
             &rec_id, sizeof(darshan_record_id));
         free(rec_ref);
@@ -909,10 +664,8 @@ static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
 
     /* allocate DXT record ourselves if Darshan core registration succeeded */
     file_rec = malloc(sizeof(*file_rec));
-    printf("file_rec: %p\n", file_rec);
     if(!file_rec)
     {
-        printf("file_rec is NULL\n");
         darshan_delete_record_ref(&(dxt_posix_runtime->rec_id_hash),
             &rec_id, sizeof(darshan_record_id));
         free(rec_ref);
@@ -922,7 +675,6 @@ static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
     memset(file_rec, 0, sizeof(*file_rec));
 
     dxt_posix_runtime->file_rec_count++;
-    printf("dxt_posix_runtime->file_rec_count: %d\n", dxt_posix_runtime->file_rec_count);
     dxt_posix_runtime->mem_used += sizeof(*file_rec);
     DXT_UNLOCK();
 
@@ -932,7 +684,6 @@ static struct dxt_file_record_ref *dxt_posix_track_new_file_record(
     gethostname(file_rec->hostname, HOSTNAME_SIZE);
 
     rec_ref->file_rec = file_rec;
-    printf("rec_ref->file_rec: %p\n", rec_ref->file_rec);
 
     return(rec_ref);
 }
@@ -1015,8 +766,6 @@ static void dxt_free_record_data(void *rec_ref_p, void *user_ptr)
 
     free(dxt_rec_ref->write_traces);
     free(dxt_rec_ref->read_traces);
-    free(dxt_rec_ref->open_traces);
-    free(dxt_rec_ref->stat_traces);
     free(dxt_rec_ref->file_rec);
 }
 
@@ -1026,31 +775,20 @@ static void dxt_free_record_data(void *rec_ref_p, void *user_ptr)
 
 static void dxt_serialize_posix_records(void *rec_ref_p, void *user_ptr)
 {
-    printf("dxt_serialize_posix_records\n");
     struct dxt_file_record_ref *rec_ref = (struct dxt_file_record_ref *)rec_ref_p;
     struct dxt_file_record *file_rec;
     int64_t record_size = 0;
     int64_t record_write_count = 0;
     int64_t record_read_count = 0;
-    int64_t record_open_count = 0;
-    int64_t record_stat_count = 0;
     void *tmp_buf_ptr;
 
-    printf("rec_ref: %p\n", rec_ref);
     assert(rec_ref);
     file_rec = rec_ref->file_rec;
-    printf("file_rec: %p\n", file_rec);
     assert(file_rec);
 
     record_write_count = file_rec->write_count;
     record_read_count = file_rec->read_count;
-    record_open_count = file_rec->open_count;
-    record_stat_count = file_rec->stat_count;
-    printf("record_write_count: %d\n", record_write_count);
-    printf("record_read_count: %d\n", record_read_count);
-    printf("record_open_count: %d\n", record_open_count);
-    printf("record_stat_count: %d\n", record_stat_count);
-    if (record_write_count == 0 && record_read_count == 0 && record_open_count == 0 && record_stat_count == 0)
+    if (record_write_count == 0 && record_read_count == 0)
         return;
 
     /*
@@ -1058,10 +796,7 @@ static void dxt_serialize_posix_records(void *rec_ref_p, void *user_ptr)
      * dxt_file_record + write_traces + read_traces
      */
     record_size = sizeof(struct dxt_file_record) +
-            (record_write_count + record_read_count + record_open_count + record_stat_count) * sizeof(segment_info);
-    printf("record_size: %d\n", record_size);
-
-
+            (record_write_count + record_read_count) * sizeof(segment_info);
 
     tmp_buf_ptr = (void *)(dxt_posix_runtime->record_buf +
         dxt_posix_runtime->record_buf_size);
@@ -1082,18 +817,6 @@ static void dxt_serialize_posix_records(void *rec_ref_p, void *user_ptr)
     tmp_buf_ptr = (void *)(tmp_buf_ptr +
                 record_read_count * sizeof(segment_info));
 
-    /*Copy open record */
-    memcpy(tmp_buf_ptr, (void *)(rec_ref->open_traces),
-            record_open_count * sizeof(segment_info));
-    tmp_buf_ptr = (void *)(tmp_buf_ptr +
-                record_open_count * sizeof(segment_info));
-
-    /*Copy stat record */
-    memcpy(tmp_buf_ptr, (void *)(rec_ref->stat_traces),
-            record_stat_count * sizeof(segment_info));
-    tmp_buf_ptr = (void *)(tmp_buf_ptr +
-                record_stat_count * sizeof(segment_info));
-
     dxt_posix_runtime->record_buf_size += record_size;
 }
 
@@ -1101,29 +824,20 @@ static void dxt_posix_output(
     void **dxt_posix_buf,
     int *dxt_posix_buf_sz)
 {
-    printf("dxt_posix_output\n");
     assert(dxt_posix_runtime);
-    printf("dxt_posix_runtime: %p\n", dxt_posix_runtime);
 
     *dxt_posix_buf_sz = 0;
 
     dxt_posix_runtime->record_buf = malloc(dxt_posix_runtime->mem_allocated);
-    printf("dxt_posix_runtime->record_buf: %p\n", dxt_posix_runtime->record_buf);
     if(!(dxt_posix_runtime->record_buf))
-    {
-        printf("dxt_posix_runtime->record_buf is NULL\n");
         return;
-    }
     memset(dxt_posix_runtime->record_buf, 0, dxt_posix_runtime->mem_allocated);
     dxt_posix_runtime->record_buf_size = 0;
 
-    printf("dxt_posix_runtime->record_buf_size: %d\n", dxt_posix_runtime->record_buf_size);
-    printf("dxt_posix_runtime->rec_id_hash: %p\n", dxt_posix_runtime->rec_id_hash);
     /* iterate all dxt posix records and serialize them to the output buffer */
     darshan_iter_record_refs(dxt_posix_runtime->rec_id_hash,
         dxt_serialize_posix_records, NULL);
 
-    printf("dxt_posix_runtime->record_buf_size: %d\n", dxt_posix_runtime->record_buf_size);
     /* set output */
     *dxt_posix_buf = dxt_posix_runtime->record_buf;
     *dxt_posix_buf_sz = dxt_posix_runtime->record_buf_size;
@@ -1215,7 +929,7 @@ static void dxt_mpiio_output(
     darshan_iter_record_refs(dxt_mpiio_runtime->rec_id_hash,
         dxt_serialize_mpiio_records, NULL);
 
-    /* set output */ 
+    /* set output */
     *dxt_mpiio_buf = dxt_mpiio_runtime->record_buf;
     *dxt_mpiio_buf_sz = dxt_mpiio_runtime->record_buf_size;
 
@@ -1249,5 +963,3 @@ static void dxt_mpiio_cleanup()
  *
  * vim: ts=8 sts=4 sw=4 expandtab
  */
-
-/* structure to store details of open call */

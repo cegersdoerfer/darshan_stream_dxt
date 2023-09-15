@@ -58,8 +58,6 @@ void dxt_posix_write(darshan_record_id rec_id, int64_t offset,
         int64_t length, double start_time, double end_time);
 void dxt_posix_read(darshan_record_id rec_id, int64_t offset,
         int64_t length, double start_time, double end_time);
-void dxt_posix_open(darshan_record_id rec_id, double start_time, double end_time);
-void dxt_posix_stat(darshan_record_id rec_id, double start_time, double end_time);
 
 /* dxt_mpiio_write(), dxt_mpiio_read()
  *

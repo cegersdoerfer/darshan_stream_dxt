@@ -1,12 +1,16 @@
 [build-system]
 requires = [
     "wheel",
-    "setuptools",
+    "setuptools<64.0.0",
 ]
+
+[project]
+requires-python = ">=3.7"
 
 [tool.cibuildwheel]
 environment = "PYDARSHAN_BUILD_EXT=1"
 skip = [
+    "cp36-*",
     "pp*",
     "*musllinux*",
     "*i686*",
@@ -18,7 +22,8 @@ test-requires = [
     "pytest",
     "lxml",
     "matplotlib",
-    "importlib_resources;python_version<'3.9'"
+    "importlib_resources;python_version<'3.9'",
+    "humanize"
 ]
 before-test = "pip install -U git+https://github.com/darshan-hpc/darshan-logs.git@main"
 test-command = "pytest {package}"

@@ -35,6 +35,7 @@
 #include "darshan-dynamic.h"
 #include "darshan-dxt.h"
 #include "darshan-heatmap.h"
+#include "darshan-ldms.h"
 
 #ifndef HAVE_OFF64_T
 typedef int64_t off64_t;
@@ -113,8 +114,8 @@ DARSHAN_FORWARD_DECL(rename, int, (const char *oldpath, const char *newpath));
  * darshan-posix-log-format.h) pointed to by 'file_rec'. This metadata
  * assists with the instrumenting of specific statistics in the file record.
  *
- * RATIONALE: the POSIX module needs to track some stateful, volatile 
- * information about each open file (like the current file offset, most recent 
+ * RATIONALE: the POSIX module needs to track some stateful, volatile
+ * information about each open file (like the current file offset, most recent
  * access time, etc.) to aid in instrumentation, but this information can't be
  * stored in the darshan_posix_file struct because we don't want it to appear in
  * the final darshan log file.  We therefore associate a posix_file_record_ref
@@ -149,7 +150,7 @@ struct posix_file_record_ref
 };
 
 /* The posix_runtime structure maintains necessary state for storing
- * POSIX file records and for coordinating with darshan-core at 
+ * POSIX file records and for coordinating with darshan-core at
  * shutdown time.
  */
 struct posix_runtime
@@ -207,7 +208,7 @@ static int darshan_mem_alignment = 1;
 #define POSIX_UNLOCK() pthread_mutex_unlock(&posix_runtime_mutex)
 
 #define POSIX_WTIME() \
-    __darshan_disabled ? 0 : darshan_core_wtime();
+    __darshan_disabled ? 0 : darshan_core_wtime();\
 
 /* note that if the break condition is triggered in this macro, then it
  * will exit the do/while loop holding a lock that will be released in
@@ -230,10 +231,10 @@ static int darshan_mem_alignment = 1;
 } while(0)
 
 #define POSIX_RECORD_OPEN(__ret, __path, __mode, __tm1, __tm2) do { \
-    printf("POSIX_RECORD_OPEN\n"); \
     darshan_record_id __rec_id; \
     struct posix_file_record_ref *__rec_ref; \
     char *__newpath; \
+    extern struct darshanConnector dC; \
     if(__ret < 0) break; \
     __newpath = darshan_clean_file_path(__path); \
     if(!__newpath) __newpath = (char *)__path; \
@@ -244,11 +245,13 @@ static int darshan_mem_alignment = 1;
         if(__newpath != __path) free(__newpath); \
         break; \
     } \
-    /* DXT to record detailed read tracing information */ \
     _POSIX_RECORD_OPEN(__ret, __rec_ref, __mode, __tm1, __tm2, 1, -1); \
-    dxt_posix_open(__rec_ref->file_rec->base_rec.id, __tm1, __tm2); \
     darshan_instrument_fs_data(__rec_ref->fs_type, __newpath, __ret); \
     if(__newpath != __path) free(__newpath); \
+    /* LDMS to publish realtime read tracing information to daemon*/ \
+    if(!dC.ldms_lib)\
+        if(!dC.posix_enable_ldms)\
+         darshan_ldms_connector_send(__rec_ref->file_rec->base_rec.id, __rec_ref->file_rec->base_rec.rank, __rec_ref->file_rec->counters[POSIX_OPENS], "open", -1, -1, -1, -1, -1, __tm1, __tm2, __rec_ref->file_rec->fcounters[POSIX_F_META_TIME], "POSIX", "MET");\
 } while(0)
 
 #define POSIX_RECORD_REFOPEN(__ret, __rec_ref, __tm1, __tm2, __ref_counter) do { \
@@ -275,13 +278,13 @@ static int darshan_mem_alignment = 1;
 } while(0)
 
 #define POSIX_RECORD_READ(__ret, __fd, __pread_flag, __pread_offset, __aligned, __tm1, __tm2) do { \
-    printf("POSIX_RECORD_READ\n"); \
     struct posix_file_record_ref* rec_ref; \
     int64_t stride; \
     int64_t this_offset; \
     int64_t file_alignment; \
     struct darshan_common_val_counter *cvc; \
     double __elapsed = __tm2-__tm1; \
+    extern struct darshanConnector dC; \
     if(__ret < 0) break; \
     rec_ref = darshan_lookup_record_ref(posix_runtime->fd_hash, &(__fd), sizeof(int)); \
     if(!rec_ref) break; \
@@ -290,7 +293,6 @@ static int darshan_mem_alignment = 1;
     else \
         this_offset = rec_ref->offset; \
     /* DXT to record detailed read tracing information */ \
-    printf("rec_ref->file_rec->base_rec.id READ= %d \n", rec_ref->file_rec->base_rec.id); \
     dxt_posix_read(rec_ref->file_rec->base_rec.id, this_offset, __ret, __tm1, __tm2); \
     /* heatmap to record traffic summary */ \
     heatmap_update(posix_runtime->heatmap_id, HEATMAP_READ, __ret, __tm1, __tm2); \
@@ -339,16 +341,20 @@ static int darshan_mem_alignment = 1;
         rec_ref->file_rec->counters[POSIX_MAX_READ_TIME_SIZE] = __ret; } \
     DARSHAN_TIMER_INC_NO_OVERLAP(rec_ref->file_rec->fcounters[POSIX_F_READ_TIME], \
         __tm1, __tm2, rec_ref->last_read_end); \
+    /* LDMS to publish realtime read tracing information to daemon*/ \
+    if(!dC.ldms_lib)\
+        if(!dC.posix_enable_ldms)\
+        darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, rec_ref->file_rec->counters[POSIX_READS], "read", this_offset, __ret, rec_ref->file_rec->counters[POSIX_MAX_BYTE_READ],rec_ref->file_rec->counters[POSIX_RW_SWITCHES], -1,  __tm1, __tm2, rec_ref->file_rec->fcounters[POSIX_F_READ_TIME], "POSIX", "MOD");\
 } while(0)
 
 #define POSIX_RECORD_WRITE(__ret, __fd, __pwrite_flag, __pwrite_offset, __aligned, __tm1, __tm2) do { \
-    printf("POSIX_RECORD_WRITE\n"); \
     struct posix_file_record_ref* rec_ref; \
     int64_t stride; \
     int64_t this_offset; \
     int64_t file_alignment; \
     struct darshan_common_val_counter *cvc; \
     double __elapsed = __tm2-__tm1; \
+    extern struct darshanConnector dC; \
     if(__ret < 0) break; \
     rec_ref = darshan_lookup_record_ref(posix_runtime->fd_hash, &__fd, sizeof(int)); \
     if(!rec_ref) break; \
@@ -405,27 +411,21 @@ static int darshan_mem_alignment = 1;
         rec_ref->file_rec->counters[POSIX_MAX_WRITE_TIME_SIZE] = __ret; } \
     DARSHAN_TIMER_INC_NO_OVERLAP(rec_ref->file_rec->fcounters[POSIX_F_WRITE_TIME], \
         __tm1, __tm2, rec_ref->last_write_end); \
+    /* LDMS to publish realtime write tracing information to daemon*/ \
+    if(!dC.ldms_lib)\
+        if(!dC.posix_enable_ldms)\
+            darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, rec_ref->file_rec->counters[POSIX_WRITES], "write", this_offset, __ret, rec_ref->file_rec->counters[POSIX_MAX_BYTE_WRITTEN], rec_ref->file_rec->counters[POSIX_RW_SWITCHES], -1, __tm1, __tm2, rec_ref->file_rec->fcounters[POSIX_F_WRITE_TIME], "POSIX", "MOD");\
 } while(0)
 
 #define POSIX_LOOKUP_RECORD_STAT(__path, __statbuf, __tm1, __tm2) do { \
     darshan_record_id rec_id; \
     struct posix_file_record_ref* rec_ref; \
     char *newpath = darshan_clean_file_path(__path); \
-    printf("newpath = %s \n", newpath); \
     if(!newpath) newpath = (char *)__path; \
     rec_id = darshan_core_gen_record_id(newpath); \
-    printf("rec_id = %d \n", &rec_id); \
-    printf("posix_runtime->rec_id_hash = %d \n", posix_runtime->rec_id_hash); \
-    printf("sizeof(darshan_record_id) = %d \n", sizeof(darshan_record_id)); \
     rec_ref = darshan_lookup_record_ref(posix_runtime->rec_id_hash, &rec_id, sizeof(darshan_record_id)); \
-    printf("rec_ref = %d \n", rec_ref); \
     if(!rec_ref) rec_ref = posix_track_new_file_record(rec_id, newpath); \
-    printf("rec_ref = %d \n", rec_ref); \
     if(newpath != __path) free(newpath); \
-    printf("pre dxt stat \n"); \
-    printf("rec_ref->file_rec->base_rec.id = %d \n", rec_ref->file_rec->base_rec.id); \
-    dxt_posix_stat(rec_ref->file_rec->base_rec.id, __tm1, __tm2); \
-    printf("post dxt stat \n"); \
     if(rec_ref) { \
         POSIX_RECORD_STAT(rec_ref, __statbuf, __tm1, __tm2); \
     } \
@@ -439,7 +439,7 @@ static int darshan_mem_alignment = 1;
 
 
 /**********************************************************
- *      Wrappers for POSIX I/O functions of interest      * 
+ *      Wrappers for POSIX I/O functions of interest      *
  **********************************************************/
 
 int DARSHAN_DECL(open)(const char *path, int flags, ...)
@@ -450,7 +450,7 @@ int DARSHAN_DECL(open)(const char *path, int flags, ...)
 
     MAP_OR_FAIL(open);
 
-    if(flags & O_CREAT) 
+    if(flags & O_CREAT)
     {
         va_list arg;
         va_start(arg, flags);
@@ -1636,6 +1636,13 @@ int DARSHAN_DECL(close)(int fd)
             rec_ref->file_rec->fcounters[POSIX_F_META_TIME],
             tm1, tm2, rec_ref->last_meta_end);
         darshan_delete_record_ref(&(posix_runtime->fd_hash), &fd, sizeof(int));
+
+#ifdef HAVE_LDMS
+        /* publish close information for posix */
+        extern struct darshanConnector dC;
+        if(!dC.posix_enable_ldms)
+        darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, -1, "close", -1, -1, -1, -1, -1, tm1, tm2, rec_ref->file_rec->fcounters[POSIX_F_META_TIME], "POSIX", "MOD");
+#endif
     }
     POSIX_POST_RECORD();
 
@@ -1916,7 +1923,7 @@ static void posix_runtime_initialize()
     posix_runtime_init_attempted = 1;
 
     /* try and store a default number of records for this module */
-    psx_rec_count = 2048;
+    psx_rec_count = DARSHAN_DEF_MOD_REC_COUNT;
 
     /* register the POSIX module with darshan core */
     ret = darshan_core_register_module(
@@ -1938,7 +1945,6 @@ static void posix_runtime_initialize()
     memset(posix_runtime, 0, sizeof(*posix_runtime));
 
     /* allow DXT module to initialize if needed */
-    printf("darshan library init: calling dxt_posix_runtime_initialize()\n");
     dxt_posix_runtime_initialize();
 
     /* register a heatmap */
@@ -1957,10 +1963,7 @@ static struct posix_file_record_ref *posix_track_new_file_record(
 
     rec_ref = malloc(sizeof(*rec_ref));
     if(!rec_ref)
-    {
-        printf("darshan library warning: failed to allocate memory for POSIX file record.\n");
         return(NULL);
-    }
     memset(rec_ref, 0, sizeof(*rec_ref));
 
     /* add a reference to this file record based on record id */
@@ -1968,7 +1971,6 @@ static struct posix_file_record_ref *posix_track_new_file_record(
         sizeof(darshan_record_id), rec_ref);
     if(ret == 0)
     {
-        printf("darshan library warning: POSIX file record ref already exists for %s.\n", path);
         free(rec_ref);
         return(NULL);
     }
@@ -1976,8 +1978,6 @@ static struct posix_file_record_ref *posix_track_new_file_record(
     /* register the actual file record with darshan-core so it is persisted
      * in the log file
      */
-    printf("darshan library info: registering POSIX file record for %s.\n", path);
-    printf("darshan library info: POSIX file record size = %d\n", sizeof(struct darshan_posix_file));
     file_rec = darshan_core_register_record(
         rec_id,
         path,
@@ -1987,7 +1987,6 @@ static struct posix_file_record_ref *posix_track_new_file_record(
 
     if(!file_rec)
     {
-        printf("darshan library warning: POSIX file record could not be registered.\n");
         darshan_delete_record_ref(&(posix_runtime->rec_id_hash),
             &rec_id, sizeof(darshan_record_id));
         free(rec_ref);
@@ -1995,7 +1994,6 @@ static struct posix_file_record_ref *posix_track_new_file_record(
     }
 
     /* registering this file record was successful, so initialize some fields */
-    printf("darshan library info: POSIX file record %d registered for %s.\n", rec_id, path);
     file_rec->base_rec.id = rec_id;
     file_rec->base_rec.rank = my_rank;
     file_rec->counters[POSIX_MEM_ALIGNMENT] = darshan_mem_alignment;
@@ -2012,7 +2010,7 @@ static struct posix_file_record_ref *posix_track_new_file_record(
 }
 
 /* finds the tracker structure for a given aio operation, removes it from
- * the associated linked list for this file record, and returns a pointer.  
+ * the associated linked list for this file record, and returns a pointer.
  *
  * returns NULL if aio operation not found
  */
@@ -2446,7 +2444,7 @@ void darshan_posix_shutdown_bench_setup(int test_case)
     {
         case 1: /* single file-per-process */
             snprintf(filepath, 256, "fpp-0_rank-%d", my_rank);
-            
+
             POSIX_RECORD_OPEN(fd_array[0], filepath, 777, 0, 1);
             POSIX_RECORD_WRITE(size_array[0], fd_array[0], 0, 0, 1, 1, 2);
 
@@ -2634,17 +2632,15 @@ static void posix_output(
 
 static void posix_cleanup()
 {
-    printf("POSIX module called cleanup\n");
     POSIX_LOCK();
     assert(posix_runtime);
 
     /* cleanup internal structures used for instrumenting */
     darshan_iter_record_refs(posix_runtime->rec_id_hash,
         &posix_finalize_file_records, NULL);
-    
     darshan_clear_record_refs(&(posix_runtime->fd_hash), 0);
     darshan_clear_record_refs(&(posix_runtime->rec_id_hash), 1);
-    printf("POSIX module finished cleaning up internal structures\n");
+
     free(posix_runtime);
     posix_runtime = NULL;
     posix_runtime_init_attempted = 0;
@@ -2661,4 +2657,3 @@ static void posix_cleanup()
  *
  * vim: ts=8 sts=4 sw=4 expandtab
  */
-

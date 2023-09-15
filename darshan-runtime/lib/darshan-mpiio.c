@@ -29,6 +29,7 @@
 #include "darshan-dynamic.h"
 #include "darshan-dxt.h"
 #include "darshan-heatmap.h"
+#include "darshan-ldms.h"
 
 DARSHAN_FORWARD_DECL(PMPI_File_close, int, (MPI_File *fh));
 DARSHAN_FORWARD_DECL(PMPI_File_iread_at, int, (MPI_File fh, MPI_Offset offset, void *buf, int count, MPI_Datatype datatype, __D_MPI_REQUEST *request));
@@ -120,8 +121,8 @@ DARSHAN_FORWARD_DECL(PMPI_File_write_shared, int, (MPI_File fh, void *buf, int c
  * darshan-mpiio-log-format.h) pointed to by 'file_rec'. This metadata
  * assists with the instrumenting of specific statistics in the file record.
  *
- * RATIONALE: the MPIIO module needs to track some stateful, volatile 
- * information about each open file (like the current file offset, most recent 
+ * RATIONALE: the MPIIO module needs to track some stateful, volatile
+ * information about each open file (like the current file offset, most recent
  * access time, etc.) to aid in instrumentation, but this information can't be
  * stored in the darshan_mpiio_file struct because we don't want it to appear in
  * the final darshan log file.  We therefore associate a mpiio_file_record_ref
@@ -149,7 +150,7 @@ struct mpiio_file_record_ref
 };
 
 /* The mpiio_runtime structure maintains necessary state for storing
- * MPI-IO file records and for coordinating with darshan-core at 
+ * MPI-IO file records and for coordinating with darshan-core at
  * shutdown time.
  */
 struct mpiio_runtime
@@ -191,7 +192,7 @@ static int my_rank = -1;
 #define MPIIO_UNLOCK() pthread_mutex_unlock(&mpiio_runtime_mutex)
 
 #define MPIIO_WTIME() \
-    __darshan_disabled ? 0 : darshan_core_wtime();
+    __darshan_disabled ? 0 : darshan_core_wtime(); \
 
 /* note that if the break condition is triggered in this macro, then it
  * will exit the do/while loop holding a lock that will be released in
@@ -218,6 +219,7 @@ static int my_rank = -1;
     struct mpiio_file_record_ref *rec_ref; \
     char *newpath; \
     int comm_size; \
+    extern struct darshanConnector dC;\
     if(__ret != MPI_SUCCESS) break; \
     newpath = darshan_clean_file_path(__path); \
     if(!newpath) newpath = (char *)__path; \
@@ -243,7 +245,11 @@ static int my_rank = -1;
     DARSHAN_TIMER_INC_NO_OVERLAP(rec_ref->file_rec->fcounters[MPIIO_F_META_TIME], \
         __tm1, __tm2, rec_ref->last_meta_end); \
     darshan_add_record_ref(&(mpiio_runtime->fh_hash), &__fh, sizeof(MPI_File), rec_ref); \
-    if(newpath != __path) free(newpath); \
+    if(newpath != __path) free(newpath);\
+    /* LDMS to publish realtime read tracing information to daemon*/ \
+    if(!dC.ldms_lib)\
+        if(!dC.mpiio_enable_ldms)\
+        darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, rec_ref->file_rec->counters[MPIIO_COLL_OPENS] + rec_ref->file_rec->counters[MPIIO_INDEP_OPENS], "open", -1, -1, -1, -1, -1, __tm1, __tm2, rec_ref->file_rec->fcounters[MPIIO_F_META_TIME], "MPIIO", "MET");\
 } while(0)
 
 /* XXX: this check is needed to work around an OpenMPI bug that is triggered by
@@ -263,6 +269,7 @@ static int get_byte_offset = 0;
     int64_t size_ll; \
     struct darshan_common_val_counter *cvc; \
     double __elapsed = __tm2-__tm1; \
+    extern struct darshanConnector dC;\
     if(__ret != MPI_SUCCESS) break; \
     rec_ref = darshan_lookup_record_ref(mpiio_runtime->fh_hash, &(__fh), sizeof(MPI_File)); \
     if(!rec_ref) break; \
@@ -297,6 +304,10 @@ static int get_byte_offset = 0;
         rec_ref->file_rec->counters[MPIIO_MAX_READ_TIME_SIZE] = size; } \
     DARSHAN_TIMER_INC_NO_OVERLAP(rec_ref->file_rec->fcounters[MPIIO_F_READ_TIME], \
         __tm1, __tm2, rec_ref->last_read_end); \
+    /* LDMS to publish realtime read tracing information to daemon*/ \
+    if(!dC.ldms_lib)\
+        if(!dC.mpiio_enable_ldms)\
+            darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, rec_ref->file_rec->counters[__counter], "read", displacement, size, -1, rec_ref->file_rec->counters[MPIIO_RW_SWITCHES], -1, __tm1, __tm2, rec_ref->file_rec->fcounters[MPIIO_F_READ_TIME], "MPIIO", "MOD");\
 } while(0)
 
 #define MPIIO_RECORD_WRITE(__ret, __fh, __count, __datatype, __offset, __counter, __tm1, __tm2) do { \
@@ -306,6 +317,7 @@ static int get_byte_offset = 0;
     int64_t size_ll; \
     struct darshan_common_val_counter *cvc; \
     double __elapsed = __tm2-__tm1; \
+    extern struct darshanConnector dC; \
     if(__ret != MPI_SUCCESS) break; \
     rec_ref = darshan_lookup_record_ref(mpiio_runtime->fh_hash, &(__fh), sizeof(MPI_File)); \
     if(!rec_ref) break; \
@@ -340,23 +352,26 @@ static int get_byte_offset = 0;
         rec_ref->file_rec->counters[MPIIO_MAX_WRITE_TIME_SIZE] = size; } \
     DARSHAN_TIMER_INC_NO_OVERLAP(rec_ref->file_rec->fcounters[MPIIO_F_WRITE_TIME], \
         __tm1, __tm2, rec_ref->last_write_end); \
+    /* LDMS to publish realtime read tracing information to daemon*/ \
+    if(!dC.ldms_lib)\
+        if(!dC.mpiio_enable_ldms)\
+            darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, rec_ref->file_rec->counters[__counter], "write", displacement, size, -1, rec_ref->file_rec->counters[MPIIO_RW_SWITCHES], -1,  __tm1, __tm2, rec_ref->file_rec->fcounters[MPIIO_F_WRITE_TIME], "MPIIO", "MOD");\
 } while(0)
 
 /**********************************************************
- *        Wrappers for MPI-IO functions of interest       * 
+ *        Wrappers for MPI-IO functions of interest       *
  **********************************************************/
 
 #ifdef HAVE_MPI_CONST
-int DARSHAN_DECL(MPI_File_open)(MPI_Comm comm, const char *filename, int amode, MPI_Info info, MPI_File *fh) 
+int DARSHAN_DECL(MPI_File_open)(MPI_Comm comm, const char *filename, int amode, MPI_Info info, MPI_File *fh)
 #else
-int DARSHAN_DECL(MPI_File_open)(MPI_Comm comm, char *filename, int amode, MPI_Info info, MPI_File *fh) 
+int DARSHAN_DECL(MPI_File_open)(MPI_Comm comm, char *filename, int amode, MPI_Info info, MPI_File *fh)
 #endif
 {
     int ret;
     MPI_File tmp_fh;
     char* tmp;
     double tm1, tm2;
-
     MAP_OR_FAIL(PMPI_File_open);
 
     tm1 = MPIIO_WTIME();
@@ -366,7 +381,7 @@ int DARSHAN_DECL(MPI_File_open)(MPI_Comm comm, char *filename, int amode, MPI_In
     /* use ROMIO approach to strip prefix if present */
     /* strip off prefix if there is one, but only skip prefixes
      * if they are greater than length one to allow for windows
-     * drive specifications (e.g. c:\...) 
+     * drive specifications (e.g. c:\...)
      */
     tmp = strchr(filename, ':');
     if (tmp > filename + 1) {
@@ -391,6 +406,7 @@ int DARSHAN_DECL(MPI_File_read)(MPI_File fh, void *buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_read);
@@ -419,6 +435,7 @@ int DARSHAN_DECL(MPI_File_write)(MPI_File fh, void *buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_write);
@@ -500,6 +517,7 @@ int DARSHAN_DECL(MPI_File_read_all)(MPI_File fh, void * buf, int count, MPI_Data
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_read_all);
@@ -527,6 +545,7 @@ int DARSHAN_DECL(MPI_File_write_all)(MPI_File fh, void * buf, int count, MPI_Dat
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_write_all);
@@ -612,6 +631,7 @@ int DARSHAN_DECL(MPI_File_read_shared)(MPI_File fh, void * buf, int count, MPI_D
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_read_shared);
@@ -639,6 +659,7 @@ int DARSHAN_DECL(MPI_File_write_shared)(MPI_File fh, void * buf, int count, MPI_
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_write_shared);
@@ -669,6 +690,7 @@ int DARSHAN_DECL(MPI_File_read_ordered)(MPI_File fh, void * buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_read_ordered);
@@ -699,6 +721,7 @@ int DARSHAN_DECL(MPI_File_write_ordered)(MPI_File fh, void * buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_write_ordered);
@@ -729,6 +752,7 @@ int DARSHAN_DECL(MPI_File_read_all_begin)(MPI_File fh, void * buf, int count, MP
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_read_all_begin);
@@ -755,6 +779,7 @@ int DARSHAN_DECL(MPI_File_write_all_begin)(MPI_File fh, void * buf, int count, M
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_write_all_begin);
@@ -791,7 +816,7 @@ int DARSHAN_DECL(MPI_File_read_at_all_begin)(MPI_File fh, MPI_Offset offset, voi
     ret = __real_PMPI_File_read_at_all_begin(fh, offset, buf,
         count, datatype);
     tm2 = MPIIO_WTIME();
-    
+
     MPIIO_PRE_RECORD();
     MPIIO_RECORD_READ(ret, fh, count, datatype, offset, MPIIO_SPLIT_READS, tm1, tm2);
     MPIIO_POST_RECORD();
@@ -837,6 +862,7 @@ int DARSHAN_DECL(MPI_File_read_ordered_begin)(MPI_File fh, void * buf, int count
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_read_ordered_begin);
@@ -864,6 +890,7 @@ int DARSHAN_DECL(MPI_File_write_ordered_begin)(MPI_File fh, void * buf, int coun
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_write_ordered_begin);
@@ -892,6 +919,7 @@ int DARSHAN_DECL(MPI_File_iread)(MPI_File fh, void * buf, int count, MPI_Datatyp
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_iread);
@@ -920,6 +948,7 @@ int DARSHAN_DECL(MPI_File_iwrite)(MPI_File fh, void * buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_iwrite);
@@ -1007,6 +1036,7 @@ int DARSHAN_DECL(MPI_File_iread_shared)(MPI_File fh, void * buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_iread_shared);
@@ -1037,6 +1067,7 @@ int DARSHAN_DECL(MPI_File_iwrite_shared)(MPI_File fh, void * buf, int count,
 {
     int ret;
     double tm1, tm2;
+
     MPI_Offset offset;
 
     MAP_OR_FAIL(PMPI_File_iwrite_shared);
@@ -1169,6 +1200,14 @@ int DARSHAN_DECL(MPI_File_close)(MPI_File *fh)
             tm1, tm2, rec_ref->last_meta_end);
         darshan_delete_record_ref(&(mpiio_runtime->fh_hash),
             &tmp_fh, sizeof(MPI_File));
+
+#ifdef HAVE_LDMS
+    /* publish close information for mpiio */
+    extern struct darshanConnector dC;
+    if(!dC.mpiio_enable_ldms)
+        darshan_ldms_connector_send(rec_ref->file_rec->base_rec.id, rec_ref->file_rec->base_rec.rank, -1, "close", -1, -1, -1, -1, -1, tm1, tm2, rec_ref->file_rec->fcounters[MPIIO_F_META_TIME], "MPIIO", "MOD");
+#endif
+
     }
     MPIIO_POST_RECORD();
 
@@ -1350,6 +1389,7 @@ static void mpiio_record_reduction_op(void* infile_v, void* inoutfile_v,
                 &(tmp_file.counters[MPIIO_ACCESS1_ACCESS]),
                 &(tmp_file.counters[MPIIO_ACCESS1_COUNT]),
                 &inoutfile->counters[j], 1, inoutfile->counters[j+4], 1);
+
         }
 
         /* min non-zero (if available) value */
@@ -1452,11 +1492,13 @@ static void mpiio_record_reduction_op(void* infile_v, void* inoutfile_v,
                 inoutfile->fcounters[MPIIO_F_SLOWEST_RANK_TIME];
         }
 
+
         /* update pointers */
         *inoutfile = tmp_file;
         inoutfile++;
         infile++;
     }
+
 
     return;
 }

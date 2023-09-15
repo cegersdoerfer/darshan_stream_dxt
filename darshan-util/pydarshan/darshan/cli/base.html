@@ -40,16 +40,21 @@
             <div>
           % endif
 
-          % for fig_title, fig in report_data.sections[sect_title].items():
-            <div>
-            <h3>${fig_title}</h3>
+          % for fig in report_data.sections[sect_title]:
+            % if not fig.fig_grid_area:
+                <div>
+            % else:
+                <div class="${fig.fig_grid_area}">
+            % endif
+            <h3>${fig.fig_title}</h3>
             <figure style="width: ${fig.fig_width}px;">
             % if fig.fig_html:
               ${fig.fig_html}
               <figcaption>${fig.fig_description}</figcaption>
             % else:
               <!-- temporary handling for DXT-disabled cases -->
-              <figcaption style="font-weight: bold; color: red; width: 400px;">
+              <!-- now also handles the bandwidth text... -->
+              <figcaption style="font-weight: bold; color: ${fig.text_only_color}; width: 400px;">
                 ${fig.fig_description}
               </figcaption>
             % endif

@@ -46,6 +46,7 @@
 #include "darshan-config.h"
 #include "darshan-dynamic.h"
 #include "darshan-dxt.h"
+#include "darshan-ldms.h"
 
 #ifdef DARSHAN_LUSTRE
 #include <lustre/lustre_user.h>
@@ -210,7 +211,6 @@ void darshan_core_initialize(int argc, char **argv)
     /* setup darshan runtime if darshan is enabled and hasn't been initialized already */
     if (__darshan_core != NULL || getenv("DARSHAN_DISABLE"))
         return;
-
     init_start = darshan_core_wtime_absolute();
 
     /* allocate structure to track darshan core runtime information */
@@ -231,12 +231,6 @@ void darshan_core_initialize(int argc, char **argv)
 
         /* set PID that initialized Darshan runtime */
         init_core->pid = getpid();
-
-        /* setup fork handlers if not using MPI */
-        if(!using_mpi && !orig_parent_pid)
-        {
-            pthread_atfork(NULL, NULL, &darshan_core_fork_child_cb);
-        }
 
         /* parse any user-supplied runtime configuration of Darshan */
         /* NOTE: as the ordering implies, environment variables override any
@@ -352,6 +346,17 @@ void darshan_core_initialize(int argc, char **argv)
             init_core->config.mod_disabled = ~(init_core->config.mod_disabled & 0);
         }
 
+        /* setup fork handlers if not using MPI */
+        if(!using_mpi && !orig_parent_pid)
+        {
+            pthread_atfork(NULL, NULL, &darshan_core_fork_child_cb);
+        }
+
+#ifdef HAVE_LDMS
+        /* pass init_core to darshan-ldms connector initialization*/
+        darshan_ldms_connector_initialize(init_core);
+#endif
+      
         /* if darshan was successfully initialized, set the global pointer
          * and record absolute start time so that we can later generate
          * relative times with this as a reference point.
@@ -426,8 +431,6 @@ void darshan_core_shutdown(int write_log)
     darshan_record_id *mod_shared_recs = NULL;
     int shared_rec_cnt = 0;
 #endif
-
-    printf("darshan_core_shutdown\n");
 
     /* disable darhan-core while we shutdown */
     __DARSHAN_CORE_LOCK();
@@ -639,11 +642,19 @@ void darshan_core_shutdown(int write_log)
                 }
 
                 /* allow the module an opportunity to reduce shared files */
-                if(this_mod->mod_funcs.mod_redux_func && (mod_shared_rec_cnt > 0) &&
-                   !final_core->config.disable_shared_redux_flag)
+                if(this_mod->mod_funcs.mod_redux_func && (mod_shared_rec_cnt > 0))
                 {
-                    this_mod->mod_funcs.mod_redux_func(mod_buf, final_core->mpi_comm,
-                        mod_shared_recs, mod_shared_rec_cnt);
+                    /* run reductions as long as they aren't disabled */
+                    /* NOTE: shared reductions should never be disabled for the
+                     *       HEATMAP module, as the shared reduction step is used
+                     *       to produce a consistent heatmap format across ranks
+                     */
+                    if(!final_core->config.disable_shared_redux_flag ||
+                       (i == DARSHAN_HEATMAP_MOD))
+                    {
+                        this_mod->mod_funcs.mod_redux_func(mod_buf, final_core->mpi_comm,
+                            mod_shared_recs, mod_shared_rec_cnt);
+                    }
                 }
             }
 #endif
@@ -790,7 +801,6 @@ static void *darshan_init_mmap_log(struct darshan_core_runtime* core, int jobid)
 
     mmap_size = sizeof(struct darshan_header) + DARSHAN_JOB_RECORD_SIZE +
         + core->config.name_mem + core->config.mod_mem;
-        
     if(mmap_size % sys_page_size)
         mmap_size = ((mmap_size / sys_page_size) + 1) * sys_page_size;
 
@@ -1336,7 +1346,6 @@ static int darshan_add_name_record_ref(struct darshan_core_runtime *core,
      */
     __DARSHAN_CORE_UNLOCK();
     ref = malloc(sizeof(*ref));
-    printf("ref = %p\n", ref);
     __DARSHAN_CORE_LOCK();
     if(!ref)
     {
@@ -1383,8 +1392,19 @@ static void darshan_get_user_name(char *cuser)
      * work in statically compiled binaries.
      */
 
+#ifdef __DARSHAN_USERNAME_ENV
+    logname_string = getenv(__DARSHAN_USERNAME_ENV);
+    if(logname_string)
+    {
+        strncpy(cuser, logname_string, (L_cuserid-1));
+    }
+#endif
+
 #ifdef __DARSHAN_ENABLE_CUSERID
-    cuserid(cuser);
+    if(strcmp(cuser, "") == 0)
+    {
+        cuserid(cuser);
+    }
 #endif
 
     /* if cuserid() didn't work, then check the environment */
@@ -1668,7 +1688,6 @@ static int darshan_log_open(char *logfile_name, struct darshan_core_runtime *cor
         return(0);
     }
 #endif
-    printf("darshan_log_open: %s\n", logfile_name);
 
     /* open the darshan log file for writing */
     log_fh->nompi_fd = open(logfile_name, O_CREAT | O_WRONLY | O_EXCL, S_IRUSR);
@@ -1690,7 +1709,7 @@ static int darshan_log_write_job_record(darshan_core_log_fh log_fh,
     if (using_mpi && my_rank > 0)
         return(0);
 #endif
-    printf("darshan_log_write_job_record: %d\n", *inout_off);
+
     /* compress the job info and the trailing mount/exe data */
     ret = darshan_deflate_buffer(pointers, lengths, 2,
         core->comp_buf, &comp_buf_sz);
@@ -1831,7 +1850,7 @@ static int darshan_log_write_name_record_hash(darshan_core_log_fh log_fh,
         }
     }
 #endif
-    printf("darshan_log_write_name_record_hash: %d\n", *inout_off);
+
     /* collectively write out the record hash to the darshan log */
     ret = darshan_log_append(log_fh, core, core->log_name_p,
         name_rec_buf_len, inout_off);
@@ -1844,7 +1863,7 @@ static int darshan_log_write_header(darshan_core_log_fh log_fh,
     int ret;
 
     core->log_hdr_p->comp_type = DARSHAN_ZLIB_COMP;
-    printf("darshan_log_write_header: %d\n", sizeof(struct darshan_header));
+
 #ifdef HAVE_MPI
     MPI_Status status;
     if(using_mpi)
@@ -1915,7 +1934,7 @@ static int darshan_log_append(darshan_core_log_fh log_fh, struct darshan_core_ru
 {
     int comp_buf_sz = core->config.mod_mem;
     int ret;
-    printf("darshan_log_append: %d\n", *inout_off);
+
     /* compress the input buffer */
     ret = darshan_deflate_buffer((void **)&buf, &count, 1,
         core->comp_buf, &comp_buf_sz);
@@ -1996,7 +2015,7 @@ void darshan_log_close(darshan_core_log_fh log_fh)
         return;
     }
 #endif
-    printf("darshan_log_close\n");
+
     close(log_fh.nompi_fd);
     return;
 }
@@ -2016,7 +2035,7 @@ void darshan_log_finalize(char *logfile_name, double start_log_time)
 #ifdef __DARSHAN_GROUP_READABLE_LOGS
         chmod_mode |= S_IRGRP;
 #endif
-    printf("darshan_log_finalize: %s\n", logfile_name);
+
     if(getenv("DARSHAN_LOGFILE"))
     {
         chmod(logfile_name, chmod_mode);
@@ -2063,7 +2082,7 @@ static int darshan_deflate_buffer(void **pointers, int *lengths, int count,
     int i;
     int total_target = 0;
     z_stream tmp_stream;
-    printf("darshan_deflate_buffer\n");
+
     /* just return if there is no data */
     for(i = 0; i < count; i++)
     {
@@ -2112,7 +2131,7 @@ static int darshan_deflate_buffer(void **pointers, int *lengths, int count,
             {
                 /* We ran out of buffer space for compression.  In theory,
                  * we could start using some of the file_array buffer space
-                 * without having to malloc again.  In practice, this case 
+                 * without having to malloc again.  In practice, this case
                  * is going to be practically impossible to hit.
                  */
                 deflateEnd(&tmp_stream);
@@ -2147,7 +2166,7 @@ static void darshan_core_cleanup(struct darshan_core_runtime* core)
 {
     int i;
     struct darshan_core_name_record_ref *tmp, *ref;
-    printf("darshan_core_cleanup\n");
+
     HASH_ITER(hlink, core->name_hash, ref, tmp)
     {
         HASH_DELETE(hlink, core->name_hash, ref);
@@ -2187,17 +2206,19 @@ static void darshan_core_cleanup(struct darshan_core_runtime* core)
 
 static void darshan_core_fork_child_cb(void)
 {
-    printf("darshan_core_fork_child_cb\n");
-    /* hold onto the original parent PID, which we will use as jobid if the user didn't
-     * provide a jobid env variable
-     */
-    parent_pid = __darshan_core->pid;
-    if(!orig_parent_pid)
-        orig_parent_pid = parent_pid;
+    if(__darshan_core)
+    {
+        /* hold onto the original parent PID, which we will use as jobid if the user didn't
+         * provide a jobid env variable
+         */
+        parent_pid = __darshan_core->pid;
+        if(!orig_parent_pid)
+            orig_parent_pid = parent_pid;
 
-    /* shutdown and re-init darshan, making sure to not write out a log file */
-    darshan_core_shutdown(0);
-    darshan_core_initialize(0, NULL);
+        /* shutdown and re-init darshan, making sure to not write out a log file */
+        darshan_core_shutdown(0);
+        darshan_core_initialize(0, NULL);
+    }
 
     return;
 }
@@ -2210,7 +2231,6 @@ static int darshan_core_name_is_excluded(const char *name, darshan_module_id mod
     int tmp_index = 0;
     struct darshan_core_regex *regex;
 
-    printf("darshan_core_name_is_excluded\n");
     /* set flag if this module's record names are based on file paths */
     name_is_path = 1;
     if((mod_id == DARSHAN_APMPI_MOD) || (mod_id == DARSHAN_APXC_MOD) ||
@@ -2545,10 +2565,8 @@ int darshan_core_register_module(
          * module memory pool managed by Darshan core, so we just grant
          * however much they request and hold onto this value for tracking
          */
-        printf("DXT module %d requested %zu bytes\n", mod_id, mod_mem_req);
         mod->rec_mem_avail = mod_mem_req;
         *inout_rec_count = mod_recs_req;
-        printf("DXT module %d granted %zu bytes\n", mod_id, mod->rec_mem_avail);
     }
 
     /* register module with darshan */
@@ -2616,44 +2634,21 @@ void *darshan_core_register_record(
     void *rec_buf;
     int ret;
 
-    if (mod_id < 0) {
-        printf("mod_id is out of bounds\n");
-        return NULL;
-    }   
-    if (mod_id == DXT_POSIX_MOD)
-        printf("DXT_POSIX_MOD\n");
-    if (mod_id == NULL)
-        printf("NULL\n");
-    printf("darshan_core_register_record\n");
-    printf("rec_id %llu\n", rec_id);
-    printf("mod_id %d\n", mod_id);
-
     __DARSHAN_CORE_LOCK();
     if(!__darshan_core)
     {
-        printf("darshan_core_register_record 0\n");
         __DARSHAN_CORE_UNLOCK();
         return(NULL);
     }
 
-    if (rec_size <= 0)
-        printf("rec_size is invalid\n");
-    else
-        printf("rec_size %zu\n", rec_size);
     /* check to see if this module has enough space to store a new record */
     if(__darshan_core->mod_array[mod_id]->rec_mem_avail < rec_size)
     {
-        printf("darshan_core_register_record 1\n");
-        if (mod_id == DXT_POSIX_MOD)
-            printf("DXT_POSIX_MOD\n");
-        printf("rec_mem_avail %zu\n", __darshan_core->mod_array[mod_id]->rec_mem_avail);
-        printf("rec_size %zu\n", rec_size);
         DARSHAN_MOD_FLAG_SET(__darshan_core->log_hdr_p->partial_flag, mod_id);
         __DARSHAN_CORE_UNLOCK();
         return(NULL);
     }
 
-    printf("darshan_core_register_record 2\n");
     /* register a name record if a name is given for this record */
     if(name)
     {
@@ -2661,24 +2656,19 @@ void *darshan_core_register_record(
         {
             /* do not register record if name matches any exclusion rules */
             __DARSHAN_CORE_UNLOCK();
-            printf("darshan_core_name_is_excluded 1\n");
             return(NULL);
         }
 
         /* check to see if we've already stored the id->name mapping for
          * this record, and add a new name record if not
          */
-        printf("darshan_core_name_is_excluded 2\n");
         HASH_FIND(hlink, __darshan_core->name_hash, &rec_id,
             sizeof(darshan_record_id), ref);
         if(!ref)
         {
-            printf("darshan_core_name_is_excluded 3\n");
             ret = darshan_add_name_record_ref(__darshan_core, rec_id, name, mod_id);
-            printf("darshan_add_name_record_ref %d\n", ret);
             if(ret == 0)
             {
-                printf("darshan add record failed\n");
                 DARSHAN_MOD_FLAG_SET(__darshan_core->log_hdr_p->partial_flag, mod_id);
                 __DARSHAN_CORE_UNLOCK();
                 return(NULL);
@@ -2687,12 +2677,10 @@ void *darshan_core_register_record(
         else
         {
             DARSHAN_MOD_FLAG_SET(ref->mod_flags, mod_id);
-            printf("darshan_core_name_is_excluded 4\n");
         }
     }
 
     __darshan_core->mod_array[mod_id]->rec_mem_avail -= rec_size;
-    printf("darshan_core_name_is_excluded 5\n");
     if((mod_id != DXT_POSIX_MOD) && (mod_id != DXT_MPIIO_MOD))
     {
         /* traditional (non-DXT) modules need to provide a record
@@ -2715,14 +2703,9 @@ void *darshan_core_register_record(
     }
 
     __DARSHAN_CORE_UNLOCK();
-    printf("rec_buf %p\n", rec_buf);
-    printf("darshan_core_name_is_excluded 6\n");
 
     if(fs_info)
-    {
         darshan_fs_info_from_path(name, fs_info);
-        printf("darshan_fs_info_from_path %s\n", name);
-    }
 
     return(rec_buf);;
 }

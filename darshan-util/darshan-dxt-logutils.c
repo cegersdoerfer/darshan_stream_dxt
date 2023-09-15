@@ -63,8 +63,6 @@ static void dxt_swap_file_record(struct dxt_file_record *file_rec)
     DARSHAN_BSWAP64(&file_rec->shared_record);
     DARSHAN_BSWAP64(&file_rec->write_count);
     DARSHAN_BSWAP64(&file_rec->read_count);
-    DARSHAN_BSWAP64(&file_rec->open_count);
-    DARSHAN_BSWAP64(&file_rec->stat_count);
 }
 
 static void dxt_swap_segments(struct dxt_file_record *file_rec)
@@ -81,12 +79,6 @@ static void dxt_swap_segments(struct dxt_file_record *file_rec)
         DARSHAN_BSWAP64(&tmp_seg->end_time);
         tmp_seg++;
     }
-    for(i=0; i < (file_rec->open_count + file_rec->stat_count); i++)
-    {
-        DARSHAN_BSWAP64(&tmp_seg->start_time);
-        DARSHAN_BSWAP64(&tmp_seg->end_time);
-        tmp_seg++;
-    }
 }
 
 static int dxt_log_get_posix_file(darshan_fd fd, void** dxt_posix_buf_p)
@@ -96,10 +88,7 @@ static int dxt_log_get_posix_file(darshan_fd fd, void** dxt_posix_buf_p)
     int ret;
     int64_t io_trace_size;
 
-    fprintf(stderr, "dxt_log_get_posix_file\n");
-    fprintf(stderr, "fd->mod_map[DXT_POSIX_MOD].len = %d\n", fd->mod_map[DXT_POSIX_MOD].len);
     if(fd->mod_map[DXT_POSIX_MOD].len == 0)
-        fprintf(stderr, "Warning: DXT POSIX module not linked with this executable.\n");
         return(0);
 
     if(fd->mod_ver[DXT_POSIX_MOD] == 0 ||
@@ -123,7 +112,7 @@ static int dxt_log_get_posix_file(darshan_fd fd, void** dxt_posix_buf_p)
         dxt_swap_file_record(&tmp_rec);
     }
 
-    io_trace_size = (tmp_rec.write_count + tmp_rec.read_count + tmp_rec.open_count + tmp_rec.stat_count) *
+    io_trace_size = (tmp_rec.write_count + tmp_rec.read_count) *
                         sizeof(segment_info);
 
     if (*dxt_posix_buf_p == NULL)
@@ -313,8 +302,6 @@ void dxt_log_print_posix_file(void *posix_file_rec, char *file_name,
 
     int64_t write_count = file_rec->write_count;
     int64_t read_count = file_rec->read_count;
-    int64_t open_count = file_rec->open_count;
-    int64_t stat_count = file_rec->stat_count;
     segment_info *io_trace = (segment_info *)
         ((void *)file_rec + sizeof(struct dxt_file_record));
 
@@ -333,8 +320,8 @@ void dxt_log_print_posix_file(void *posix_file_rec, char *file_name,
 
     printf("\n# DXT, file_id: %" PRIu64 ", file_name: %s\n", f_id, file_name);
     printf("# DXT, rank: %" PRId64 ", hostname: %s\n", rank, hostname);
-    printf("# DXT, write_count: %" PRId64 ", read_count: %" PRId64 ", open_count: %" PRId64 ", stat_count: %" PRId64 "\n",
-                write_count, read_count, open_count, stat_count);
+    printf("# DXT, write_count: %" PRId64 ", read_count: %" PRId64 "\n",
+                write_count, read_count);
 
     printf("# DXT, mnt_pt: %s, fs_type: %s\n", mnt_pt, fs_type);
     if (lustreFS) {
@@ -411,30 +398,6 @@ void dxt_log_print_posix_file(void *posix_file_rec, char *file_name,
                 if (print_count >= stripe_count)
                     break;
             }
-        }
-
-        printf("\n");
-    }
-    for (i = write_count + read_count; i < write_count + read_count + open_count; i++) {
-        start_time = io_trace[i].start_time;
-        end_time = io_trace[i].end_time;
-
-        printf("%8s%8" PRId64 "%7s%9d%16s%16s%12.4f%12.4f", "X_POSIX", rank, "open", (int)(i - write_count - read_count), "N/A", "N/A", start_time, end_time);
-
-        if (lustreFS) {
-            printf("  [N/A]");
-        }
-
-        printf("\n");
-    }
-    for (i = write_count + read_count + open_count; i < write_count + read_count + open_count + stat_count; i++) {
-        start_time = io_trace[i].start_time;
-        end_time = io_trace[i].end_time;
-
-        printf("%8s%8" PRId64 "%7s%9d%16s%16s%12.4f%12.4f", "X_POSIX", rank, "stat", (int)(i - write_count - read_count - open_count), "N/A", "N/A", start_time, end_time);
-
-        if (lustreFS) {
-            printf("  [N/A]");
         }
 
         printf("\n");
