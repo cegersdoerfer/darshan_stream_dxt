@@ -17,6 +17,7 @@ C_SRCS = darshan-core-init-finalize.c \
          darshan-core.c \
          darshan-common.c \
          darshan-config.c \
+         darshan-dxt-streamer.c
          lookup3.c \
          lookup8.c
 
@@ -108,11 +109,18 @@ libdarshan_la_CPPFLAGS = $(AM_CPPFLAGS) -D_LARGEFILE64_SOURCE -DDARSHAN_PRELOAD
 libdarshan_a_SOURCES   = $(C_SRCS)
 libdarshan_a_CPPFLAGS  = $(AM_CPPFLAGS) -D_LARGEFILE64_SOURCE -DDARSHAN_WRAP_MMAP
 
+if BUILD_DXT_STREAMER_MODULE
+libdarshan_la_LIBADD += -ldxt_stream -ldxt -lovis_json -lcoll
+libdarshan_la_CPPFLAGS += -I$(DXT_STREAMER_HOME)/include
+libdarshan_la_LDFLAGS = -L$(DXT_STREAMER_HOME)/lib -Wl,-rpath=$(DXT_STREAMER_HOME)/lib
+endif
+
 H_SRCS = darshan-common.h \
          darshan.h \
          darshan-config.h \
          darshan-lustre.h \
          darshan-dxt.h \
+         darshan-dxt-stremer.h \
          uthash.h \
          darshan-dynamic.h \
          utlist.h \
@@ -123,6 +131,7 @@ EXTRA_DIST = $(H_SRCS) \
              darshan-posix.c \
              darshan-stdio.c \
              darshan-dxt.c \
+             darshan-dxt-streamer.c \
              darshan-mpiio.c \
              darshan-pnetcdf.c \
              darshan-pnetcdf-api.m4 \
