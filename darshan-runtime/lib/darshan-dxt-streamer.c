@@ -119,12 +119,8 @@ void darshan_dxt_streamer_connector_send(uint64_t record_id, int64_t rank, int64
 
     sprintf(jb11,"{\"schema\":%s, \"uid\":%ld, \"exe\":\"%s\",\"job_id\":%ld,\"rank\":%ld,\"ProducerName\":\"%s\",\"file\":\"%s\",\"record_id\":%"PRIu64",\"module\":\"%s\",\"type\":\"%s\",\"max_byte\":%ld,\"switches\":%ld,\"flushes\":%ld,\"cnt\":%ld,\"op\":\"%s\",\"seg\":[{\"pt_sel\":%ld,\"irreg_hslab\":%ld,\"reg_hslab\":%ld,\"ndims\":%ld,\"npoints\":%ld,\"off\":%ld,\"len\":%ld,\"start\":%0.6f,\"dur\":%0.6f,\"total\":%0.6f,\"timestamp\":%lu.%.6lu}]}", dC.schema, dC.uid, dC.exename, dC.jobid, rank, dC.hname, filepath, record_id, mod_name, data_type, max_byte, rw_switch, flushes, record_count, rwo, dC.hdf5_data[0], dC.hdf5_data[1], dC.hdf5_data[2], dC.hdf5_data[3], dC.hdf5_data[4], offset, length, start_time, end_time-start_time, total_time, tspec_end.tv_sec, micro_s);
 
-    if (getenv("DARSHAN_LDMS_VERBOSE"))
+    if (getenv("DARSHAN_DXT_STREAMER_VERBOSE"))
             printf("JSON Message: %s\n", jb11);
-
-    rc = dxt_streamerd_stream_publish(dC.dxt_streamer_darsh, dC.env_dxt_streamer_stream, DXT_STREAMERD_STREAM_JSON, jb11, strlen(jb11) + 1);
-    if (rc)
-        printf("Error %d publishing data.\n", rc);
 
     out_1:
          return;
