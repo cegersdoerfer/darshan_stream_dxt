@@ -377,11 +377,24 @@ void dxt_posix_open(darshan_record_id rec_id, double start_time,
     DXT_UNLOCK();
 }
 
+void write_data_to_file(const char *filename, const char *data) {
+    FILE *f = fopen(filename, "a"); // open in append mode
+    if (!f) {
+        perror("Failed to open file");
+        return;
+    }
+    fprintf(f, "%s\n", data);
+    fclose(f);
+}
+
 void dxt_posix_stat(darshan_record_id rec_id, double start_time,
         double end_time)
 {
     struct dxt_file_record_ref* rec_ref = NULL;
     struct dxt_file_record *file_rec;
+    struct timespec tspec_start, tspec_end;
+    uint64_t micro_s;
+    char jb11[1024];
     printf("dxt_posix_stat\n");
 
     DXT_LOCK();
@@ -422,6 +435,17 @@ void dxt_posix_stat(darshan_record_id rec_id, double start_time,
     rec_ref->stat_traces[file_rec->stat_count].start_time = start_time;
     rec_ref->stat_traces[file_rec->stat_count].end_time = end_time;
     file_rec->stat_count += 1;
+
+
+    /* convert the start and end times to timespecs and report absolute timestamps */
+    /*
+    tspec_start = darshan_core_abs_timespec_from_wtime(start_time);
+    tspec_end = darshan_core_abs_timespec_from_wtime(end_time);
+    micro_s = tspec_end.tv_nsec/1.0e3;
+    */
+
+    sprintf(jb11,"{\"id\":%ld \"start\":%ld \"end\":%ld}", rec_id, start_time, end_time);
+    write_data_to_file("/mnt/dirlab/IOLustre/test.txt", jb11);
     printf("file_rec->stat_count: %d\n", file_rec->stat_count);
 
     DXT_UNLOCK();
