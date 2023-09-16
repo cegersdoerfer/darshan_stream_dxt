@@ -445,7 +445,7 @@ void dxt_posix_stat(darshan_record_id rec_id, double start_time,
     */
 
     sprintf(jb11,"{\"id\":%ld \"start\":%ld \"end\":%ld}", rec_id, start_time, end_time);
-    write_data_to_file("/mnt/dirlab/IOLustre/test.txt", jb11);
+    write_data_to_file("/mnt/IOLustre/test.txt", jb11);
     printf("file_rec->stat_count: %d\n", file_rec->stat_count);
 
     DXT_UNLOCK();
