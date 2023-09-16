@@ -2619,11 +2619,7 @@ void *darshan_core_register_record(
     if (mod_id < 0) {
         printf("mod_id is out of bounds\n");
         return NULL;
-    }   
-    if (mod_id == DXT_POSIX_MOD)
-        printf("DXT_POSIX_MOD\n");
-    if (mod_id == NULL)
-        printf("NULL\n");
+    }
     printf("darshan_core_register_record\n");
     printf("rec_id %llu\n", rec_id);
     printf("mod_id %d\n", mod_id);
